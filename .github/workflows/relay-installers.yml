@@ -1,0 +1,22 @@
+name: Relay verified Windows installers
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_url:
+        description: Short-lived read-only URL for the exact accepted CI archive
+        type: string
+        required: true
+permissions:
+  contents: write
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify immutable archive and installers, upload only installers to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/relay-installers.cjs
