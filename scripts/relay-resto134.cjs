@@ -1,15 +1,16 @@
 const fs=require('fs'),os=require('os'),path=require('path'),crypto=require('crypto'),cp=require('child_process'),assert=require('assert/strict');
+let phase='input';
 (async()=>{
  const url=JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH,'utf8')).inputs.artifact_url;
  console.log('::add-mask::'+url);const u=new URL(url);assert.equal(u.protocol,'https:');assert.ok(u.hostname.endsWith('.blob.core.windows.net')||u.hostname.endsWith('.actions.githubusercontent.com'));
- const response=await fetch(url,{signal:AbortSignal.timeout(180000)});assert.equal(response.status,200);
+ phase='download';const response=await fetch(url,{signal:AbortSignal.timeout(180000)});assert.equal(response.status,200);
  const zip=Buffer.from(await response.arrayBuffer());assert.equal(zip.length,83897546);assert.equal(crypto.createHash('sha256').update(zip).digest('hex'),'8b9a6b379bf6a59679250a590141c0c8f91746bec1b3bce8a46427cb6f95ca64');
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'accepted-resto134-')),archive=path.join(dir,'accepted.zip');fs.writeFileSync(archive,zip);
  const python=`import zipfile,hashlib,json,pathlib,sys\nz=zipfile.ZipFile(sys.argv[1]); out=pathlib.Path(sys.argv[2])\ndef entry(suffix):\n a=[x for x in z.namelist() if x.endswith(suffix)]; assert len(a)==1; return z.read(a[0])\nr=json.loads(entry('evidence/acceptance-results.json')); assert r['passed'] is True; assert len(r['phases'])==7; assert all(x['passed'] for x in r['phases']); assert len(r['builds'])==1\nb=r['builds'][0]; assert b['product']=='cantine' and b['version']=='1.3.4' and b['appId']=='com.gestioncantine.app'; assert b['signature']['status']=='NotSigned'\ndata=entry('sources/cantine/dist/'+b['file']); digest=hashlib.sha256(data).hexdigest(); assert digest==b['sha256']; assert len(data)==b['bytes']\n(out/'resto-1.3.4.exe').write_bytes(data); (out/'SHA256SUMS.txt').write_text(digest+'  resto-1.3.4.exe\\n'); (out/'acceptance-results.json').write_text(json.dumps(r,ensure_ascii=False,indent=2)); print(json.dumps({'version':b['version'],'sha256':digest,'bytes':len(data),'signature':b['signature'],'phases':len(r['phases'])}))\n`;
- const extract=cp.spawnSync('python3',['-c',python,archive,dir],{encoding:'utf8'});assert.equal(extract.status,0,'Accepted archive metadata and installer verification failed');process.stdout.write(extract.stdout);
+ phase='extract';const extract=cp.spawnSync('python3',['-c',python,archive,dir],{encoding:'utf8'});if(extract.status!==0)process.stderr.write(extract.stderr);assert.equal(extract.status,0,'Accepted archive metadata and installer verification failed');process.stdout.write(extract.stdout);
  const repo='beddiarhoussemeddin-gif/institution-desktop-releases',tag='resto-v1.3.4';
- const info=cp.spawnSync('gh',['api',`repos/${repo}/releases/tags/${tag}`],{encoding:'utf8'});assert.equal(info.status,0);assert.equal(JSON.parse(info.stdout).draft,true,'Never mutate a published release');
- const upload=cp.spawnSync('gh',['release','upload',tag,path.join(dir,'resto-1.3.4.exe'),path.join(dir,'SHA256SUMS.txt'),'--repo',repo],{encoding:'utf8',timeout:300000});assert.equal(upload.status,0,'Draft upload failed');
+ phase='draft-check';const info=cp.spawnSync('gh',['api',`repos/${repo}/releases/tags/${tag}`],{encoding:'utf8'});assert.equal(info.status,0);assert.equal(JSON.parse(info.stdout).draft,true,'Never mutate a published release');
+ phase='draft-upload';const upload=cp.spawnSync('gh',['release','upload',tag,path.join(dir,'resto-1.3.4.exe'),path.join(dir,'SHA256SUMS.txt'),'--repo',repo],{encoding:'utf8',timeout:300000});assert.equal(upload.status,0,'Draft upload failed');
  fs.copyFileSync(path.join(dir,'acceptance-results.json'),path.join(process.env.RUNNER_TEMP,'resto134-acceptance-results.json'));
  console.log('PASS accepted Resto installer relayed to draft only; publication is separate');
-})().catch(()=>{console.error('Resto relay verification failed; nothing published');process.exitCode=1;});
+})().catch(e=>{console.error('Resto relay verification failed at '+phase+' ('+e.name+'); nothing published');process.exitCode=1;});
